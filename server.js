@@ -10,13 +10,14 @@ const requestIp = require('request-ip');
 
 const app = express();
 
-// Middleware (Allows the website to talk to this brain)
+// Middleware
 app.use(cors());
 app.use(express.json());
 
 // --- 1. DATABASE CONNECTION ---
-// I have inserted your specific URL with the password 'brownie123'
+// CORRECT VERSION: Password 'brownie123' is now inside the link
 const MONGO_URI = "mongodb+srv://anmol:brownie123@cluster0.ezth9nq.mongodb.net/?appName=Cluster0";
+
 let isMongoConnected = false;
 
 mongoose.connect(MONGO_URI)
@@ -29,56 +30,69 @@ mongoose.connect(MONGO_URI)
         console.log("   - Error Details:", err.message);
     });
 
-// --- 2. DATA BLUEPRINT ---
+// --- 2. DATA BLUEPRINT (UPDATED FOR DETAILED INFO) ---
 const visitSchema = new mongoose.Schema({
     timestamp: { type: Date, default: Date.now },
     country: String,
     city: String,
-    device: String
+    deviceType: String, // Mobile or Desktop
+    deviceName: String, // e.g., "iPhone", "Windows 10"
+    ip: String          // The Visitor's IP Address
 });
 const Visit = mongoose.model('Visit', visitSchema);
 
-// Backup memory (if database fails)
 let localVisits = [];
+
+// --- HELPER: Parse User Agent for Device Name ---
+function getDeviceName(userAgent) {
+    if (!userAgent) return 'Unknown Device';
+    if (/Windows/i.test(userAgent)) return 'Windows PC';
+    if (/Macintosh/i.test(userAgent)) return 'MacBook / iMac';
+    if (/iPhone/i.test(userAgent)) return 'iPhone';
+    if (/iPad/i.test(userAgent)) return 'iPad';
+    if (/Android/i.test(userAgent)) return 'Android Device';
+    if (/Linux/i.test(userAgent)) return 'Linux Machine';
+    return 'Unknown Device';
+}
 
 // --- 3. ROUTES ---
 
-// ROOT ROUTE: Fixes the "Cannot GET /" error
+// Root Check
 app.get('/', (req, res) => {
-    res.send(`
-        <div style="font-family: sans-serif; text-align: center; padding-top: 50px;">
-            <h1 style="color: #22c55e;">✅ Broken Brownie Backend is LIVE!</h1>
-            <p>The brain is running perfectly.</p>
-            <p>Do not close this window.</p>
-            <hr style="width: 50%; margin: 20px auto;">
-            <p style="color: #666;">Status: ${isMongoConnected ? "Connected to Cloud DB" : "Memory Mode"}</p>
-        </div>
-    `);
+    res.send(`<h1 style="color:#22c55e; font-family:sans-serif;">✅ Backend is Live</h1>`);
 });
 
-// TRACKING ROUTE: The website sends visitor info here
+// TRACKING ROUTE
 app.post('/api/track', async (req, res) => {
     try {
+        // 1. Get IP
         const clientIp = requestIp.getClientIp(req);
-        // On Localhost, IP is often ::1, so GeoIP fails. This handles that gracefully.
+        
+        // 2. Get Geo Location
         const geo = geoip.lookup(clientIp) || { country: 'Unknown', city: 'Unknown' };
-        const device = req.body.device || 'Desktop';
+        
+        // 3. Get Device Details
+        const userAgent = req.headers['user-agent'];
+        const specificDevice = getDeviceName(userAgent);
+        const deviceType = req.body.device || 'Desktop'; // Fallback from frontend
 
         const visitData = {
             timestamp: new Date(),
-            country: geo.country || 'Unknown',
-            city: geo.city || 'Unknown',
-            device: device
+            country: geo.country || 'N/A',
+            city: geo.city || 'Unknown Location',
+            deviceType: deviceType,
+            deviceName: specificDevice,
+            ip: clientIp || 'Hidden'
         };
 
-        // Save to Database OR Memory
+        // 4. Save Data
         if (isMongoConnected) {
             await Visit.create(visitData);
         } else {
             localVisits.push(visitData);
         }
 
-        console.log(`🔔 New Visitor: ${visitData.city} (${visitData.device})`);
+        console.log(`🔔 New Visit: ${visitData.ip} - ${visitData.city} (${visitData.deviceName})`);
         res.json({ status: 'tracked' });
         
     } catch (error) {
@@ -87,40 +101,29 @@ app.post('/api/track', async (req, res) => {
     }
 });
 
-// ADMIN ROUTE: The Dashboard asks for stats here
+// ADMIN ROUTE
 app.post('/api/admin/stats', async (req, res) => {
     const { password } = req.body;
     
-    // 🔒 SECURITY CHECK
     if (password !== 'brownie123') {
-        return res.status(403).json({ error: "Access Denied: Wrong Password" });
+        return res.status(403).json({ error: "Access Denied" });
     }
 
-    // Get Data
     let data = [];
     if (isMongoConnected) {
-        data = await Visit.find().sort({ timestamp: -1 }); // Get all, newest first
+        data = await Visit.find().sort({ timestamp: -1 });
     } else {
         data = localVisits.slice().reverse();
     }
     
-    // Calculate Analytics
+    // Analytics Calculation
     const total = data.length;
-    const mobile = data.filter(v => v.device === 'Mobile').length;
+    const mobile = data.filter(v => v.deviceType === 'Mobile').length;
     const desktop = total - mobile;
-    const recent = data.slice(0, 50); // Send only last 50 for the table
+    const recent = data.slice(0, 50); // Send newest 50 rows
 
     res.json({ total, mobile, desktop, recent });
 });
 
-// --- 4. START THE ENGINE ---
-// Use process.env.PORT for Render, or 5000 for Localhost
 const PORT = process.env.PORT || 5000;
-
-app.listen(PORT, () => {
-    console.log(`=============================================`);
-    console.log(`🚀 SERVER RUNNING at http://localhost:${PORT}`);
-    console.log(`   - Open this URL in browser to verify status.`);
-    console.log(`   - Waiting for website visitors...`);
-    console.log(`=============================================`);
-});
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
